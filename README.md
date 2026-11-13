@@ -98,7 +98,7 @@ Community_repair_reporting_management_system
 | 6. 安装依赖 | 没有 `node_modules` 时自动 `npm install` |
 | 7. 启动服务 | 后端 8081 + 前端 88，就绪后自动打开浏览器 |
 
-**环境要求**：脚本可以自动下载安装 JDK 8 和 Node.js；**MySQL 需要本机已安装并启动**（涉及 root 密码与系统服务，脚本只做检测和提示，不会静默安装）。
+**环境要求**：脚本可以自动下载安装 JDK 8、Node.js 和 Maven；**MySQL 需要本机已安装并启动**（涉及 root 密码与系统服务，脚本只做检测和提示，不会静默安装）。
 
 **关闭服务**：关掉标题为「后端-8081」和「前端-88」的两个命令行窗口即可。
 
@@ -132,7 +132,7 @@ Community_repair_reporting_management_system
 | MySQL | 8.0 | `mysql --version` | `mysql  Ver 8.0.x` |
 | Redis | 5.0+ | `redis-cli ping` | `PONG` |
 | Node.js | 16 ~ 22 | `node -v` | `v18.x` / `v20.x` / `v22.x` |
-| Maven | 3.6+ | `mvn -v` | `Apache Maven 3.x`（没装也能用 IDEA 内置的） |
+| Maven | 3.6+ | `mvn -v` | `Apache Maven 3.x`（没装也能用 IDEA 内置的，或由一键启动自动下载安装） |
 
 > 端口说明：后端 **8081**，前端 **88**。8080 常被 Steam 等程序占用，80 端口在 Windows 下需要管理员权限，因此均已避开。
 

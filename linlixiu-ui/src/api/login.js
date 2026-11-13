@@ -55,6 +55,7 @@ export function getCodeImg() {
       isToken: false
     },
     method: 'get',
-    timeout: 20000
+    // 后端冷启动时快速失败，交给 request.js 静默重试，页面无需手动刷新
+    timeout: 8000
   })
 }

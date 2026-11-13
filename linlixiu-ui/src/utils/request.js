@@ -117,6 +117,16 @@ service.interceptors.response.use(res => {
     } else if (message.includes("Request failed with status code")) {
       message = "系统接口" + message.substr(message.length - 3) + "异常";
     }
+    // 后端刚启动时，登录页的验证码请求容易超时；静默重试，不弹错误提示
+    const cfg = error.config || {}
+    if (cfg.url && cfg.url.indexOf('captchaImage') !== -1 &&
+        (message === '系统接口请求超时' || message === '后端接口连接异常')) {
+      cfg.__captchaRetry = (cfg.__captchaRetry || 0) + 1
+      if (cfg.__captchaRetry <= 3) {
+        return new Promise(resolve => setTimeout(resolve, 1500))
+          .then(() => service({ ...cfg, timeout: 10000 }))
+      }
+    }
     Message({ message: message, type: 'error', duration: 5 * 1000 })
     return Promise.reject(error)
   }

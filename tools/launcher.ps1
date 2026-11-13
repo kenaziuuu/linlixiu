@@ -4,7 +4,8 @@
 #  换一台电脑（比如老师的机器）也能直接双击运行：
 #    1. 逐个检测 JDK 8 / MySQL / Node.js 是否就绪
 #    2. 缺什么就提示，输入 y 自动下载安装（默认装到 D 盘）
-#    3. 齐全后自动启动 Redis、后端、前端，并打开浏览器
+#    3. 需要打包时若没有 Maven，同样询问是否自动安装
+#    4. 齐全后自动启动 Redis、后端、前端，并打开浏览器
 #
 #  说明：Redis 已内置在 tools\redis，无需安装。
 # ============================================================================
@@ -12,22 +13,31 @@
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 
+# PowerShell 5.1 在部分机器上默认仍用 TLS 1.0，下载站点早已禁用，显式启用 TLS 1.2
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+
 $root    = Split-Path -Parent $PSScriptRoot
 $uiDir   = Join-Path $root "linlixiu-ui"
 $jarPath = Join-Path $root "linlixiu-admin\target\linlixiu-admin.jar"
 $ymlPath = Join-Path $root "linlixiu-admin\src\main\resources\application-druid.yml"
 $tmpDir  = Join-Path $env:TEMP "linlixiu-setup"
 
-# 自动下载的 JDK / Node 默认放 D 盘；没有 D 盘时退回项目目录
+# 自动下载的 JDK / Maven / Node 默认放 D 盘；D 盘不存在或不可写（如光驱）时退回项目目录
+$runtimeDir = $null
 if (Test-Path "D:\") {
-    $runtimeDir = "D:\linlixiu-runtime"
-} else {
-    $runtimeDir = Join-Path $root "tools\runtime"
+    try {
+        $probe = "D:\.__linlixiu_write_test__"
+        [System.IO.File]::WriteAllText($probe, "ok")
+        Remove-Item $probe -Force -ErrorAction SilentlyContinue
+        $runtimeDir = "D:\linlixiu-runtime"
+    } catch { }
 }
+if (-not $runtimeDir) { $runtimeDir = Join-Path $root "tools\runtime" }
 
-# 下载地址：Node 走国内镜像，JDK 走 Adoptium 官方 API
-$JDK_URL  = "https://api.adoptium.net/v3/binary/latest/8/ga/windows/x64/jdk/hotspot/normal/eclipse"
-$NODE_URL = "https://registry.npmmirror.com/-/binary/node/v20.18.0/node-v20.18.0-win-x64.zip"
+# 下载地址：Node 走国内镜像，JDK 走 Adoptium 官方 API，Maven 走官方中央仓库
+$JDK_URL   = "https://api.adoptium.net/v3/binary/latest/8/ga/windows/x64/jdk/hotspot/normal/eclipse"
+$NODE_URL  = "https://registry.npmmirror.com/-/binary/node/v20.18.0/node-v20.18.0-win-x64.zip"
+$MVEN_URL  = "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip"
 
 # ---------------------------------------------------------------- 输出样式
 function Line { Write-Host "  ------------------------------------------------------" -ForegroundColor DarkGray }
@@ -60,13 +70,13 @@ function Test-Port($port) {
     return [bool]$out
 }
 
-function Test-Http($url) {
+function Test-Http($url, $timeoutMs = 5000) {
     # 不用 Invoke-WebRequest：PowerShell 5.1 下首次调用很慢，容易误判超时
     try {
         $req = [System.Net.HttpWebRequest]::Create($url)
         $req.Method = "GET"
-        $req.Timeout = 5000
-        $req.ReadWriteTimeout = 5000
+        $req.Timeout = $timeoutMs
+        $req.ReadWriteTimeout = $timeoutMs
         $req.Proxy = $null
         $res = $req.GetResponse()
         $code = [int]$res.StatusCode
@@ -176,9 +186,9 @@ function Install-Java8 {
     $zip = Join-Path $tmpDir "jdk8.zip"
     if (-not (Download-WithProgress $JDK_URL $zip)) { return $null }
     Step "正在解压到 $runtimeDir\jdk8 ..."
-    $home = Expand-AndFind $zip (Join-Path $runtimeDir "jdk8") "bin\java.exe"
-    if (-not $home) { Err "解压后没找到 bin\java.exe"; return $null }
-    $exe = Join-Path $home "bin\java.exe"
+    $jdkHome = Expand-AndFind $zip (Join-Path $runtimeDir "jdk8") "bin\java.exe"
+    if (-not $jdkHome) { Err "解压后没找到 bin\java.exe"; return $null }
+    $exe = Join-Path $jdkHome "bin\java.exe"
     if (-not (Test-Java8 $exe)) { Err "下载到的不是 JDK 8"; return $null }
     Remove-Item $zip -Force -ErrorAction SilentlyContinue
     return $exe
@@ -215,13 +225,21 @@ function Install-Mysql {
     }
     Step "正在通过 winget 安装 MySQL（可能弹出 UAC 授权窗口）..."
     & winget install --id Oracle.MySQL --accept-package-agreements --accept-source-agreements --silent 2>&1 | Out-String | Write-Host
-    return $true
+    return ($LASTEXITCODE -eq 0)
 }
 
 # ---------------------------------------------------------------- Node.js
 function Find-Node {
-    $local = Join-Path $runtimeDir "node\node.exe"
-    if (Test-Path $local) { return (Join-Path $runtimeDir "node") }
+    # 解压版保留原厂目录名（node-v20.18.0-win-x64），向下多找一层
+    $nodeRoot = Join-Path $runtimeDir "node"
+    if (Test-Path $nodeRoot) {
+        $candidates = @(Join-Path $nodeRoot "node.exe")
+        $candidates += @(Get-ChildItem $nodeRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName "node.exe" })
+        foreach ($p in $candidates) {
+            if (Test-Path $p) { return (Split-Path -Parent $p) }
+        }
+    }
     $cmd = Get-Command node -ErrorAction SilentlyContinue
     if ($cmd) { return (Split-Path -Parent $cmd.Source) }
     $patterns = @(
@@ -243,15 +261,10 @@ function Install-Node {
     $zip = Join-Path $tmpDir "node.zip"
     if (-not (Download-WithProgress $NODE_URL $zip)) { return $null }
     Step "正在解压到 $runtimeDir\node ..."
-    $home = Expand-AndFind $zip (Join-Path $runtimeDir "node") "node.exe"
-    if (-not $home) { Err "解压后没找到 node.exe"; return $null }
-    $finalDir = Join-Path $runtimeDir "node"
-    if ($home -ne $finalDir) {
-        Remove-Item $finalDir -Recurse -Force -ErrorAction SilentlyContinue
-        Move-Item $home $finalDir -Force
-    }
+    $nodeHome = Expand-AndFind $zip (Join-Path $runtimeDir "node") "node.exe"
+    if (-not $nodeHome) { Err "解压后没找到 node.exe"; return $null }
     Remove-Item $zip -Force -ErrorAction SilentlyContinue
-    return $finalDir
+    return $nodeHome
 }
 
 # ---------------------------------------------------------------- 数据源口令
@@ -266,13 +279,13 @@ function Get-MasterPassword($path) {
     return ""
 }
 
-function Set-MasterPassword($path, $pwd) {
+function Set-MasterPassword($path, $dbPwd) {
     $lines = Get-Content $path -Encoding UTF8
     $inMaster = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match '^\s*master:') { $inMaster = $true; continue }
         if ($inMaster -and $lines[$i] -match '^\s*password:') {
-            $lines[$i] = ($lines[$i] -replace 'password:.*', "password: $pwd")
+            $lines[$i] = ($lines[$i] -replace 'password:.*', "password: $dbPwd")
             break
         }
     }
@@ -280,12 +293,41 @@ function Set-MasterPassword($path, $pwd) {
     [System.IO.File]::WriteAllLines($path, $lines, $enc)
 }
 
-function Test-DbConn($exe, $pwd) {
-    $null = & $exe "-uroot" "--password=$pwd" "-e" "select 1" 2>&1
-    return ($LASTEXITCODE -eq 0)
+function Test-DbConn($exe, $dbPwd) {
+    # 口令走环境变量，避免特殊字符被命令行解析
+    $env:MYSQL_PWD = $dbPwd
+    $null = & $exe "-uroot" "-e" "select 1" 2>&1
+    $code = $LASTEXITCODE
+    Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
+    return ($code -eq 0)
+}
+
+# 依次导入三个 SQL，任一失败立即停止，避免导入中断却提示成功
+function Import-SqlFiles($exe) {
+    foreach ($f in @("ry_20231130.sql", "repair_business.sql", "quartz.sql")) {
+        $p = Join-Path $root "sql\$f"
+        if (-not (Test-Path $p)) { Err "缺少 SQL 文件：$p"; return $false }
+        Write-Host "      导入 $f ..." -ForegroundColor Gray
+        $null = cmd /c "`"$exe`" -uroot --default-character-set=utf8mb4 community_repair < `"$p`""
+        if ($LASTEXITCODE -ne 0) {
+            Err "导入 $f 失败（退出码 $LASTEXITCODE），请查看上面的 MySQL 报错"
+            return $false
+        }
+    }
+    return $true
 }
 
 function Find-Maven {
+    # 自动安装的版本可能多一层原厂目录名（apache-maven-3.9.9）
+    $mavenRoot = Join-Path $runtimeDir "maven"
+    if (Test-Path $mavenRoot) {
+        $candidates = @(Join-Path $mavenRoot "bin\mvn.cmd")
+        $candidates += @(Get-ChildItem $mavenRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName "bin\mvn.cmd" })
+        foreach ($p in $candidates) {
+            if (Test-Path $p) { return $p }
+        }
+    }
     $cmd = Get-Command mvn -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     if ($env:MAVEN_HOME) {
@@ -305,6 +347,18 @@ function Find-Maven {
         if ($f) { return $f.FullName }
     }
     return $null
+}
+
+function Install-Maven {
+    Step "开始下载 Maven 3.9.9（约 9 MB）..."
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $zip = Join-Path $tmpDir "maven.zip"
+    if (-not (Download-WithProgress $MVEN_URL $zip)) { return $null }
+    Step "正在解压到 $runtimeDir\maven ..."
+    $mavenHome = Expand-AndFind $zip (Join-Path $runtimeDir "maven") "bin\mvn.cmd"
+    if (-not $mavenHome) { Err "解压后没找到 bin\mvn.cmd"; return $null }
+    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+    return (Join-Path $mavenHome "bin\mvn.cmd")
 }
 
 # ============================================================================
@@ -353,10 +407,16 @@ if ($mysqlPort -and $mysqlExe) {
     Hint "按 Win+R 输入 services.msc，找到 MySQL 服务，右键「启动」"
     Hint "或者以管理员身份运行：net start mysql"
     Pause-Exit
+} elseif ($mysqlPort -and -not $mysqlExe) {
+    # 数据库明明在跑，只是客户端装在非标准路径，别误判成"没装 MySQL"去引导重装
+    Ok "数据库已在运行（3306）"
+    Warn "没找到 mysql 命令行客户端，跳过自动建库与数据检查"
+    Hint "若已导入过数据可直接使用；否则请用 Navicat 手动导入 sql 目录下的三个文件"
 } else {
     if (Ask-Install "MySQL（数据库）" "300 MB") {
-        $null = Install-Mysql
+        $installed = Install-Mysql
         Write-Host ""
+        if (-not $installed) { Warn "winget 未能完成安装，请手动安装后重试" }
         Warn "MySQL 装好后还需要设置 root 密码并启动服务"
         Hint "完成后再重新双击本脚本，脚本会自动建库导数据。"
         Pause-Exit
@@ -424,60 +484,71 @@ Write-Host ""
 
 # ---------------------------------------------------------------- 数据库
 Step "检查数据库 ..."
+$forcePackage = $false
 if (-not $mysqlExe) {
     Warn "没找到 mysql 命令行客户端，跳过自动建库"
     Hint "如果数据库还没初始化，请用 Navicat 手动导入 sql 目录下的三个文件"
 } else {
-    $pwd = Get-MasterPassword $ymlPath
+    $dbPwd = Get-MasterPassword $ymlPath
     $connOk = $false
-    if ($pwd) { $connOk = Test-DbConn $mysqlExe $pwd }
+    if ($dbPwd) { $connOk = Test-DbConn $mysqlExe $dbPwd }
     if (-not $connOk) {
         Warn "用项目配置里的口令连不上 MySQL，需要你提供本机 root 密码"
-        $pwd = Read-Host "  请输入 MySQL root 密码"
-        $connOk = Test-DbConn $mysqlExe $pwd
+        $dbPwd = Read-Host "  请输入 MySQL root 密码"
+        $connOk = Test-DbConn $mysqlExe $dbPwd
         if (-not $connOk) {
             Err "口令不正确，或 root 账号不允许本地登录"
             Pause-Exit
         }
-        Set-MasterPassword $ymlPath $pwd
+        Set-MasterPassword $ymlPath $dbPwd
         Ok "新口令已写入 application-druid.yml"
+        # 配置改了，已有 jar 里还是旧口令，必须重新打包才生效
+        $forcePackage = $true
     }
 
-    $hasDb = (& $mysqlExe "-uroot" "--password=$pwd" "-N" "-B" "-e" "show databases like 'community_repair'" 2>$null) -join ""
+    # 口令通过环境变量传给 mysql，避免 cmd 把 & | ( ) 等字符当命令解析
+    $env:MYSQL_PWD = $dbPwd
+
+    $hasDb = (& $mysqlExe "-uroot" "-N" "-B" "-e" "show databases like 'community_repair'" 2>$null) -join ""
     if ($hasDb -match "community_repair") {
-        $userCount = (& $mysqlExe "-uroot" "--password=$pwd" "-N" "-B" "community_repair" "-e" "select count(*) from sys_user" 2>$null) -join ""
+        $userCount = (& $mysqlExe "-uroot" "-N" "-B" "community_repair" "-e" "select count(*) from sys_user" 2>$null) -join ""
+        $queryCode = $LASTEXITCODE
         if ($userCount -match "^\d+$" -and [int]$userCount -gt 0) {
             Ok "数据库 community_repair 已就绪（用户 $userCount 个）"
+        } elseif ($queryCode -ne 0) {
+            # 查询失败不等于数据为空，此时绝不能 drop database
+            Err "读取 sys_user 失败，为免误删数据，已停止自动初始化"
+            Hint "请用 Navicat 检查 community_repair 库，然后重新运行本脚本"
+            Pause-Exit
         } else {
-            Warn "数据库存在但数据是空的，正在重新导入 ..."
-            & $mysqlExe "-uroot" "--password=$pwd" "-e" "drop database if exists community_repair; create database ``community_repair`` default character set utf8mb4 collate utf8mb4_general_ci"
-            foreach ($f in @("ry_20231130.sql", "repair_business.sql", "quartz.sql")) {
-                $p = Join-Path $root "sql\$f"
-                if (Test-Path $p) { $null = cmd /c "`"$mysqlExe`" -uroot --password=$pwd --default-character-set=utf8mb4 community_repair < `"$p`"" }
-            }
+            Warn "数据库存在但数据不完整，正在重新导入 ..."
+            $null = & $mysqlExe "-uroot" "-e" "drop database if exists community_repair; create database community_repair default character set utf8mb4 collate utf8mb4_general_ci"
+            if ($LASTEXITCODE -ne 0) { Err "重建数据库失败"; Pause-Exit }
+            if (-not (Import-SqlFiles $mysqlExe)) { Pause-Exit }
             Ok "数据已重新导入"
         }
     } else {
         Step "首次运行，正在创建数据库并导入数据 ..."
-        $null = & $mysqlExe "-uroot" "--password=$pwd" "-e" "create database ``community_repair`` default character set utf8mb4 collate utf8mb4_general_ci"
-        foreach ($f in @("ry_20231130.sql", "repair_business.sql", "quartz.sql")) {
-            $p = Join-Path $root "sql\$f"
-            if (Test-Path $p) {
-                Write-Host "      导入 $f ..." -ForegroundColor Gray
-                $null = cmd /c "`"$mysqlExe`" -uroot --password=$pwd --default-character-set=utf8mb4 community_repair < `"$p`""
-            }
-        }
+        $null = & $mysqlExe "-uroot" "-e" "create database community_repair default character set utf8mb4 collate utf8mb4_general_ci"
+        if ($LASTEXITCODE -ne 0) { Err "创建数据库失败，请查看上面的 MySQL 报错"; Pause-Exit }
+        if (-not (Import-SqlFiles $mysqlExe)) { Pause-Exit }
         Ok "数据库初始化完成"
     }
+    Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------- 后端 jar
 Step "检查后端程序 ..."
-if (Test-Path $jarPath) {
+if ((Test-Path $jarPath) -and -not $forcePackage) {
     Ok "已找到 linlixiu-admin.jar"
 } else {
-    Step "还没有打包，正在编译（首次约需 1~2 分钟）..."
+    if ($forcePackage) { Step "数据库口令已更新，正在重新打包后端 ..." }
+    else { Step "还没有打包，正在编译（首次需下载依赖，约 3~8 分钟）..." }
     $mvn = Find-Maven
+    if (-not $mvn -and (Ask-Install "Maven（后端打包工具）" "9 MB")) {
+        $mvn = Install-Maven
+        if ($mvn) { Ok "Maven 已安装：$mvn" }
+    }
     if (-not $mvn) {
         Err "没找到 Maven，无法自动打包"
         Hint "安装 Maven：https://maven.apache.org/download.cgi"
@@ -487,8 +558,9 @@ if (Test-Path $jarPath) {
     $env:JAVA_HOME = $javaHome
     Push-Location $root
     & $mvn "clean" "package" "-DskipTests" "-B" "-q"
+    $mvnCode = $LASTEXITCODE
     Pop-Location
-    if (-not (Test-Path $jarPath)) {
+    if ($mvnCode -ne 0 -or -not (Test-Path $jarPath)) {
         Err "打包失败，请查看上面的编译错误"
         Pause-Exit
     }
@@ -504,8 +576,9 @@ if (Test-Path $nodeModules) {
     Step "首次运行，正在安装前端依赖（约 3~5 分钟）..."
     Push-Location $uiDir
     & npm install --legacy-peer-deps --no-audit --no-fund
+    $npmCode = $LASTEXITCODE
     Pop-Location
-    if (-not (Test-Path $nodeModules)) {
+    if ($npmCode -ne 0 -or -not (Test-Path (Join-Path $nodeModules "vue"))) {
         Err "依赖安装失败，请查看上面的 npm 报错"
         Pause-Exit
     }
@@ -532,34 +605,49 @@ if (Test-Port 88) {
 }
 
 # ---------------------------------------------------------------- 等待就绪
+# 登录页一加载就会请求 /captchaImage，后端没预热完会弹「系统接口请求超时」。
+# 这里先替页面把接口探活，都就绪后再打开浏览器，就不用手动刷新了。
 Write-Host ""
-Step "等待服务就绪（最多 90 秒）..."
-$ready = $false
-for ($i = 0; $i -lt 45; $i++) {
-    if (Test-Http "http://localhost:88") { $ready = $true; break }
+Step "等待服务就绪（最多 120 秒）..."
+$uiReady = $false
+$apiReady = $false
+for ($i = 0; $i -lt 60; $i++) {
+    if (-not $uiReady) { $uiReady = Test-Http "http://localhost:88" }
+    # 端口先监听再发请求，避免后端没起来时每轮都白等一个 HTTP 超时
+    if (-not $apiReady -and (Test-Port 8081)) {
+        $apiReady = Test-Http "http://localhost:8081/captchaImage" 3000
+    }
+    if ($uiReady -and $apiReady) { break }
     Start-Sleep -Seconds 2
-    if ($i % 5 -eq 4) { Write-Host "      ... 已等待 $(($i + 1) * 2) 秒" -ForegroundColor DarkGray }
+    if ($i % 5 -eq 4) {
+        $s1 = if ($uiReady) { "前端 OK" } else { "前端编译中" }
+        $s2 = if ($apiReady) { "后端 OK" } else { "后端启动中" }
+        Write-Host "      ... 已等待 $(($i + 1) * 2) 秒（$s1 / $s2）" -ForegroundColor DarkGray
+    }
 }
-# 兜底：页面没返回 200，但 88 端口确实在监听，也认为服务已起来
-if (-not $ready -and (Test-Port 88)) {
-    $ready = $true
+# 兜底：页面没返回 200，但 88 端口确实在监听，也认为前端已起来
+if (-not $uiReady -and (Test-Port 88)) {
+    $uiReady = $true
     Warn "页面响应较慢，但 88 端口已就绪"
 }
+$ready = $uiReady -and $apiReady
 
 Write-Host ""
 Line
 if ($ready) {
     Ok "启动成功！"
-    try {
-        Start-Process "http://localhost:88"
-        Ok "已在默认浏览器中打开 http://localhost:88"
-    } catch {
-        Warn "没能自动打开浏览器，请手动访问 http://localhost:88"
-    }
+} elseif ($uiReady) {
+    Warn "前端已就绪，但后端接口暂时没有响应"
+    Hint "请查看「后端-8081」窗口的日志，等它打印启动完成后刷新页面即可。"
 } else {
-    Warn "前端还没有就绪，可能还在编译"
-    Hint "请查看「前端-88」窗口的日志；如果报错，把错误发我。"
-    Hint "也可以手动访问：http://localhost:88"
+    Warn "服务还没有就绪，可能仍在编译"
+    Hint "请查看「前端-88」和「后端-8081」两个窗口的日志。"
+}
+try {
+    Start-Process "http://localhost:88"
+    Ok "已在默认浏览器中打开 http://localhost:88"
+} catch {
+    Warn "没能自动打开浏览器，请手动访问 http://localhost:88"
 }
 Line
 Write-Host ""
