@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linlixiu.system.mapper.RepairEvaluationMapper">
+
+    <resultMap type="RepairEvaluation" id="RepairEvaluationResult">
+        <result property="evaluationId"   column="evaluation_id"   />
+        <result property="orderId"        column="order_id"        />
+        <result property="orderNo"        column="order_no"        />
+        <result property="residentId"     column="resident_id"     />
+        <result property="residentName"   column="resident_name"   />
+        <result property="workerId"       column="worker_id"       />
+        <result property="workerName"     column="worker_name"     />
+        <result property="score"          column="score"           />
+        <result property="speedScore"     column="speed_score"     />
+        <result property="qualityScore"   column="quality_score"   />
+        <result property="attitudeScore"  column="attitude_score"  />
+        <result property="content"        column="content"         />
+        <result property="replyContent"   column="reply_content"   />
+        <result property="replyTime"      column="reply_time"      />
+        <result property="createTime"     column="create_time"     />
+    </resultMap>
+
+    <!-- 以工单为主表，左连评价：已完工但未评价的工单也会出现在列表里 -->
+    <sql id="selectRepairEvaluationVo">
+        select e.evaluation_id, e.order_id, o.order_no,
+               o.resident_id, r.nick_name as resident_name,
+               o.worker_id, w.nick_name as worker_name,
+               e.score, e.speed_score, e.quality_score, e.attitude_score,
+               e.content, e.reply_content, e.reply_time, e.create_time
+        from repair_order o
+        left join repair_evaluation e on e.order_id = o.order_id
+        left join sys_user r on r.user_id = o.resident_id
+        left join sys_user w on w.user_id = o.worker_id
+    </sql>
+
+    <select id="selectRepairEvaluationList" parameterType="RepairEvaluation" resultMap="RepairEvaluationResult">
+        <include refid="selectRepairEvaluationVo"/>
+        <where>
+            o.status in ('completed', 'rated')
+            <!-- 默认只看已评价的；居民查看时传 includePending 一并列出待评价工单 -->
+            <if test="params.includePending == null or params.includePending == ''">
+                and e.evaluation_id is not null
+            </if>
+            <if test="orderId != null"> and e.order_id = #{orderId}</if>
+            <if test="orderNo != null and orderNo != ''"> and o.order_no like concat('%', #{orderNo}, '%')</if>
+            <if test="workerId != null"> and o.worker_id = #{workerId}</if>
+            <if test="residentId != null"> and o.resident_id = #{residentId}</if>
+            <if test="score != null"> and e.score = #{score}</if>
+            <if test="params.minScore != null and params.minScore != ''"> and e.score &gt;= #{params.minScore}</if>
+            <if test="params.maxScore != null and params.maxScore != ''"> and e.score &lt;= #{params.maxScore}</if>
+            <if test="params.beginTime != null and params.beginTime != ''">
+                and date_format(e.create_time,'%y%m%d') &gt;= date_format(#{params.beginTime},'%y%m%d')
+            </if>
+            <if test="params.endTime != null and params.endTime != ''">
+                and date_format(e.create_time,'%y%m%d') &lt;= date_format(#{params.endTime},'%y%m%d')
+            </if>
+        </where>
+        order by coalesce(e.create_time, o.finish_time) desc, o.order_id desc
+    </select>
+
+    <select id="selectRepairEvaluationById" parameterType="Long" resultMap="RepairEvaluationResult">
+        <include refid="selectRepairEvaluationVo"/>
+        where e.evaluation_id = #{evaluationId}
+    </select>
+
+    <select id="selectEvaluationByOrderId" parameterType="Long" resultMap="RepairEvaluationResult">
+        <include refid="selectRepairEvaluationVo"/>
+        where e.order_id = #{orderId}
+        limit 1
+    </select>
+
+    <insert id="insertRepairEvaluation" parameterType="RepairEvaluation" useGeneratedKeys="true" keyProperty="evaluationId">
+        insert into repair_evaluation
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="orderId != null">order_id,</if>
+            <if test="residentId != null">resident_id,</if>
+            <if test="workerId != null">worker_id,</if>
+            <if test="score != null">score,</if>
+            <if test="speedScore != null">speed_score,</if>
+            <if test="qualityScore != null">quality_score,</if>
+            <if test="attitudeScore != null">attitude_score,</if>
+            <if test="content != null">content,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="orderId != null">#{orderId},</if>
+            <if test="residentId != null">#{residentId},</if>
+            <if test="workerId != null">#{workerId},</if>
+            <if test="score != null">#{score},</if>
+            <if test="speedScore != null">#{speedScore},</if>
+            <if test="qualityScore != null">#{qualityScore},</if>
+            <if test="attitudeScore != null">#{attitudeScore},</if>
+            <if test="content != null">#{content},</if>
+            sysdate()
+        </trim>
+    </insert>
+
+    <update id="replyEvaluation">
+        update repair_evaluation
+        set reply_content = #{replyContent}, reply_time = sysdate()
+        where evaluation_id = #{evaluationId}
+    </update>
+
+    <delete id="deleteRepairEvaluationByIds" parameterType="String">
+        delete from repair_evaluation where evaluation_id in
+        <foreach item="evaluationId" collection="array" open="(" separator="," close=")">
+            #{evaluationId}
+        </foreach>
+    </delete>
+
+    <select id="selectScoreSummary" resultType="java.util.Map">
+        select
+            count(*)                                                        as total,
+            ifnull(round(avg(score), 1), 0)                                 as avgScore,
+            sum(case when score &gt;= 4 then 1 else 0 end)                    as goodCount,
+            sum(case when score &lt;= 2 then 1 else 0 end)                    as badCount,
+            ifnull(round(avg(speed_score), 1), 0)                           as avgSpeed,
+            ifnull(round(avg(quality_score), 1), 0)                         as avgQuality,
+            ifnull(round(avg(attitude_score), 1), 0)                        as avgAttitude
+        from repair_evaluation
+        <if test="residentId != null">where resident_id = #{residentId}</if>
+    </select>
+
+</mapper>

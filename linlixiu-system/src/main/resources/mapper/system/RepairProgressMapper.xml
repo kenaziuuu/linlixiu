@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linlixiu.system.mapper.RepairProgressMapper">
+
+    <resultMap type="RepairProgress" id="RepairProgressResult">
+        <result property="progressId"     column="progress_id"     />
+        <result property="orderId"        column="order_id"        />
+        <result property="node"           column="node"            />
+        <result property="nodeName"       column="node_name"       />
+        <result property="content"        column="content"         />
+        <result property="operatorId"     column="operator_id"     />
+        <result property="operatorName"   column="operator_name"   />
+        <result property="images"         column="images"          />
+        <result property="createTime"     column="create_time"     />
+    </resultMap>
+
+    <sql id="selectRepairProgressVo">
+        select p.progress_id, p.order_id, p.node, p.node_name, p.content,
+               p.operator_id, u.nick_name as operator_name, p.images, p.create_time
+        from repair_progress p
+        left join sys_user u on u.user_id = p.operator_id
+    </sql>
+
+    <select id="selectRepairProgressList" parameterType="RepairProgress" resultMap="RepairProgressResult">
+        <include refid="selectRepairProgressVo"/>
+        <where>
+            <if test="orderId != null"> and p.order_id = #{orderId}</if>
+            <if test="node != null and node != ''"> and p.node = #{node}</if>
+        </where>
+        order by p.progress_id asc
+    </select>
+
+    <insert id="insertRepairProgress" parameterType="RepairProgress" useGeneratedKeys="true" keyProperty="progressId">
+        insert into repair_progress
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="orderId != null">order_id,</if>
+            <if test="node != null and node != ''">node,</if>
+            <if test="nodeName != null and nodeName != ''">node_name,</if>
+            <if test="content != null">content,</if>
+            <if test="operatorId != null">operator_id,</if>
+            <if test="images != null">images,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="orderId != null">#{orderId},</if>
+            <if test="node != null and node != ''">#{node},</if>
+            <if test="nodeName != null and nodeName != ''">#{nodeName},</if>
+            <if test="content != null">#{content},</if>
+            <if test="operatorId != null">#{operatorId},</if>
+            <if test="images != null">#{images},</if>
+            sysdate()
+        </trim>
+    </insert>
+
+    <delete id="deleteRepairProgressByOrderId" parameterType="Long">
+        delete from repair_progress where order_id = #{orderId}
+    </delete>
+
+</mapper>

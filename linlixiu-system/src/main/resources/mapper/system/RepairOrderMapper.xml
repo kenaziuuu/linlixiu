@@ -1,0 +1,269 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linlixiu.system.mapper.RepairOrderMapper">
+
+    <resultMap type="RepairOrder" id="RepairOrderResult">
+        <result property="orderId"             column="order_id"             />
+        <result property="orderNo"             column="order_no"             />
+        <result property="residentId"          column="resident_id"          />
+        <result property="residentName"        column="resident_name"        />
+        <result property="deptId"              column="dept_id"              />
+        <result property="deptName"            column="dept_name"            />
+        <result property="repairType"          column="repair_type"          />
+        <result property="title"               column="title"                />
+        <result property="description"         column="description"          />
+        <result property="address"             column="address"              />
+        <result property="contactName"         column="contact_name"         />
+        <result property="contactPhone"        column="contact_phone"        />
+        <result property="urgency"             column="urgency"              />
+        <result property="images"              column="images"               />
+        <result property="status"              column="status"               />
+        <result property="workerId"            column="worker_id"            />
+        <result property="workerName"          column="worker_name"          />
+        <result property="dispatcherId"        column="dispatcher_id"        />
+        <result property="dispatchTime"        column="dispatch_time"        />
+        <result property="acceptTime"          column="accept_time"          />
+        <result property="finishTime"          column="finish_time"          />
+        <result property="finishResult"        column="finish_result"        />
+        <result property="cancelReason"        column="cancel_reason"        />
+        <result property="isOvertime"          column="is_overtime"          />
+        <result property="evaluateFlag"        column="evaluate_flag"        />
+        <result property="score"               column="score"                />
+        <result property="createBy"            column="create_by"            />
+        <result property="createTime"          column="create_time"          />
+        <result property="updateBy"            column="update_by"            />
+        <result property="updateTime"          column="update_time"          />
+        <result property="remark"              column="remark"               />
+    </resultMap>
+
+    <sql id="selectRepairOrderVo">
+        select o.order_id, o.order_no, o.resident_id, u.nick_name as resident_name,
+               o.dept_id, d.dept_name, o.repair_type, o.title, o.description, o.address,
+               o.contact_name, o.contact_phone, o.urgency, o.images, o.status,
+               o.worker_id, w.nick_name as worker_name, o.dispatcher_id,
+               o.dispatch_time, o.accept_time, o.finish_time, o.finish_result,
+               o.cancel_reason, o.is_overtime, o.evaluate_flag,
+               (select e.score from repair_evaluation e where e.order_id = o.order_id limit 1) as score,
+               o.create_by, o.create_time, o.update_by, o.update_time, o.remark
+        from repair_order o
+        left join sys_user u on u.user_id = o.resident_id
+        left join sys_user w on w.user_id = o.worker_id
+        left join sys_dept d on d.dept_id = o.dept_id
+    </sql>
+
+    <select id="selectRepairOrderList" parameterType="RepairOrder" resultMap="RepairOrderResult">
+        <include refid="selectRepairOrderVo"/>
+        <where>
+            <if test="orderId != null"> and o.order_id = #{orderId}</if>
+            <if test="orderNo != null and orderNo != ''"> and o.order_no like concat('%', #{orderNo}, '%')</if>
+            <if test="residentId != null"> and o.resident_id = #{residentId}</if>
+            <if test="deptId != null"> and o.dept_id = #{deptId}</if>
+            <if test="repairType != null and repairType != ''"> and o.repair_type = #{repairType}</if>
+            <if test="title != null and title != ''"> and o.title like concat('%', #{title}, '%')</if>
+            <if test="address != null and address != ''"> and o.address like concat('%', #{address}, '%')</if>
+            <if test="urgency != null and urgency != ''"> and o.urgency = #{urgency}</if>
+            <if test="status != null and status != ''"> and o.status = #{status}</if>
+            <if test="workerId != null"> and o.worker_id = #{workerId}</if>
+            <if test="isOvertime != null"> and o.is_overtime = #{isOvertime}</if>
+            <if test="evaluateFlag != null"> and o.evaluate_flag = #{evaluateFlag}</if>
+            <if test="params.beginTime != null and params.beginTime != ''">
+                and date_format(o.create_time,'%y%m%d') &gt;= date_format(#{params.beginTime},'%y%m%d')
+            </if>
+            <if test="params.endTime != null and params.endTime != ''">
+                and date_format(o.create_time,'%y%m%d') &lt;= date_format(#{params.endTime},'%y%m%d')
+            </if>
+        </where>
+        order by field(o.status,'pending','assigned','repairing','completed','rated','cancelled'), o.create_time desc
+    </select>
+
+    <select id="selectRepairOrderByOrderId" parameterType="Long" resultMap="RepairOrderResult">
+        <include refid="selectRepairOrderVo"/>
+        where o.order_id = #{orderId}
+    </select>
+
+    <insert id="insertRepairOrder" parameterType="RepairOrder" useGeneratedKeys="true" keyProperty="orderId">
+        insert into repair_order
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="orderNo != null and orderNo != ''">order_no,</if>
+            <if test="residentId != null">resident_id,</if>
+            <if test="deptId != null">dept_id,</if>
+            <if test="repairType != null and repairType != ''">repair_type,</if>
+            <if test="title != null and title != ''">title,</if>
+            <if test="description != null">description,</if>
+            <if test="address != null">address,</if>
+            <if test="contactName != null">contact_name,</if>
+            <if test="contactPhone != null">contact_phone,</if>
+            <if test="urgency != null and urgency != ''">urgency,</if>
+            <if test="images != null">images,</if>
+            <if test="status != null and status != ''">status,</if>
+            <if test="workerId != null">worker_id,</if>
+            <if test="dispatcherId != null">dispatcher_id,</if>
+            <if test="dispatchTime != null">dispatch_time,</if>
+            <if test="acceptTime != null">accept_time,</if>
+            <if test="finishTime != null">finish_time,</if>
+            <if test="finishResult != null">finish_result,</if>
+            <if test="cancelReason != null">cancel_reason,</if>
+            <if test="isOvertime != null">is_overtime,</if>
+            <if test="evaluateFlag != null">evaluate_flag,</if>
+            <if test="createBy != null">create_by,</if>
+            <if test="remark != null">remark,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="orderNo != null and orderNo != ''">#{orderNo},</if>
+            <if test="residentId != null">#{residentId},</if>
+            <if test="deptId != null">#{deptId},</if>
+            <if test="repairType != null and repairType != ''">#{repairType},</if>
+            <if test="title != null and title != ''">#{title},</if>
+            <if test="description != null">#{description},</if>
+            <if test="address != null">#{address},</if>
+            <if test="contactName != null">#{contactName},</if>
+            <if test="contactPhone != null">#{contactPhone},</if>
+            <if test="urgency != null and urgency != ''">#{urgency},</if>
+            <if test="images != null">#{images},</if>
+            <if test="status != null and status != ''">#{status},</if>
+            <if test="workerId != null">#{workerId},</if>
+            <if test="dispatcherId != null">#{dispatcherId},</if>
+            <if test="dispatchTime != null">#{dispatchTime},</if>
+            <if test="acceptTime != null">#{acceptTime},</if>
+            <if test="finishTime != null">#{finishTime},</if>
+            <if test="finishResult != null">#{finishResult},</if>
+            <if test="cancelReason != null">#{cancelReason},</if>
+            <if test="isOvertime != null">#{isOvertime},</if>
+            <if test="evaluateFlag != null">#{evaluateFlag},</if>
+            <if test="createBy != null">#{createBy},</if>
+            <if test="remark != null">#{remark},</if>
+            sysdate()
+        </trim>
+    </insert>
+
+    <update id="updateRepairOrder" parameterType="RepairOrder">
+        update repair_order
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="orderNo != null and orderNo != ''">order_no = #{orderNo},</if>
+            <if test="residentId != null">resident_id = #{residentId},</if>
+            <if test="deptId != null">dept_id = #{deptId},</if>
+            <if test="repairType != null and repairType != ''">repair_type = #{repairType},</if>
+            <if test="title != null and title != ''">title = #{title},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="address != null">address = #{address},</if>
+            <if test="contactName != null">contact_name = #{contactName},</if>
+            <if test="contactPhone != null">contact_phone = #{contactPhone},</if>
+            <if test="urgency != null and urgency != ''">urgency = #{urgency},</if>
+            <if test="images != null">images = #{images},</if>
+            <if test="status != null and status != ''">status = #{status},</if>
+            <if test="workerId != null">worker_id = #{workerId},</if>
+            <if test="dispatcherId != null">dispatcher_id = #{dispatcherId},</if>
+            <if test="dispatchTime != null">dispatch_time = #{dispatchTime},</if>
+            <if test="acceptTime != null">accept_time = #{acceptTime},</if>
+            <if test="finishTime != null">finish_time = #{finishTime},</if>
+            <if test="finishResult != null">finish_result = #{finishResult},</if>
+            <if test="cancelReason != null">cancel_reason = #{cancelReason},</if>
+            <if test="isOvertime != null">is_overtime = #{isOvertime},</if>
+            <if test="evaluateFlag != null">evaluate_flag = #{evaluateFlag},</if>
+            <if test="updateBy != null">update_by = #{updateBy},</if>
+            <if test="remark != null">remark = #{remark},</if>
+            update_time = sysdate()
+        </trim>
+        where order_id = #{orderId}
+    </update>
+
+    <delete id="deleteRepairOrderByOrderId" parameterType="Long">
+        delete from repair_order where order_id = #{orderId}
+    </delete>
+
+    <delete id="deleteRepairOrderByOrderIds" parameterType="String">
+        delete from repair_order where order_id in
+        <foreach item="orderId" collection="array" open="(" separator="," close=")">
+            #{orderId}
+        </foreach>
+    </delete>
+
+    <update id="clearWorker" parameterType="Long">
+        update repair_order
+        set worker_id = null, dispatch_time = null, accept_time = null, dispatcher_id = null
+        where order_id = #{orderId}
+    </update>
+
+    <!-- ==================== 统计 ==================== -->
+    <select id="selectOverview" resultType="java.util.Map">
+        select
+            count(*)                                                        as total,
+            sum(case when status = 'pending'   then 1 else 0 end)           as pendingCount,
+            sum(case when status = 'assigned'  then 1 else 0 end)           as assignedCount,
+            sum(case when status = 'repairing' then 1 else 0 end)           as repairingCount,
+            sum(case when status = 'completed' then 1 else 0 end)           as completedCount,
+            sum(case when status = 'rated'     then 1 else 0 end)           as ratedCount,
+            sum(case when status = 'cancelled' then 1 else 0 end)           as cancelledCount,
+            sum(case when is_overtime = 1      then 1 else 0 end)           as overtimeCount,
+            sum(case when date(create_time) = curdate() then 1 else 0 end)  as todayCount
+        from repair_order
+    </select>
+
+    <select id="selectCountByType" resultType="java.util.Map">
+        select repair_type as name, count(*) as value
+        from repair_order
+        group by repair_type
+        order by value desc
+    </select>
+
+    <select id="selectCountByStatus" resultType="java.util.Map">
+        select status as name, count(*) as value
+        from repair_order
+        group by status
+    </select>
+
+    <select id="selectTrend" resultType="java.util.Map">
+        select date_format(create_time, '%m-%d') as name, count(*) as value
+        from repair_order
+        where create_time &gt;= date_sub(curdate(), interval #{days} day)
+        group by date_format(create_time, '%m-%d')
+        order by name
+    </select>
+
+    <select id="selectWorkerRank" resultType="java.util.Map">
+        select w.worker_no as workerNo, w.worker_name as workerName,
+               count(o.order_id) as orderCount,
+               sum(case when o.status in ('completed','rated') then 1 else 0 end) as finishCount,
+               ifnull(round(avg(e.score), 1), 0) as avgScore
+        from repair_worker w
+        left join repair_order o on o.worker_id = w.user_id
+        left join repair_evaluation e on e.order_id = o.order_id
+        group by w.worker_id, w.worker_no, w.worker_name
+        order by finishCount desc, avgScore desc
+        limit #{limit}
+    </select>
+
+    <update id="scanOvertimeOrders">
+        update repair_order
+        set is_overtime = 1
+        where is_overtime = 0
+          and (
+                (status = 'pending'   and timestampdiff(minute, create_time,   now()) &gt;= 120)
+             or (status = 'assigned'  and timestampdiff(minute, dispatch_time, now()) &gt;= 120)
+             or (status = 'repairing' and timestampdiff(minute, accept_time,   now()) &gt;= 1440)
+          )
+    </update>
+
+    <select id="selectPendingOvertimeOrders" resultMap="RepairOrderResult">
+        <include refid="selectRepairOrderVo"/>
+        where o.status = 'pending' and o.is_overtime = 1
+        order by o.create_time asc
+        limit 50
+    </select>
+
+    <!-- 首页红点：维修工待处理任务数（待接单 + 维修中） -->
+    <select id="countWorkerPending" resultType="int">
+        select count(*) from repair_order
+        where worker_id = #{workerId} and status in ('assigned', 'repairing')
+    </select>
+
+    <!-- 首页红点：居民待评价的报修数（工单已完工、还没评价） -->
+    <select id="countResidentPendingEvaluation" resultType="int">
+        select count(*) from repair_order
+        where resident_id = #{residentId} and status = 'completed'
+    </select>
+
+</mapper>

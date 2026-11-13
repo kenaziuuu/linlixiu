@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linlixiu.system.mapper.RepairWorkerMapper">
+
+    <resultMap type="RepairWorker" id="RepairWorkerResult">
+        <result property="workerId"     column="worker_id"     />
+        <result property="userId"       column="user_id"       />
+        <result property="workerNo"     column="worker_no"     />
+        <result property="workerName"   column="worker_name"   />
+        <result property="phone"        column="phone"         />
+        <result property="skills"       column="skills"        />
+        <result property="status"       column="status"        />
+        <result property="totalCount"   column="total_count"   />
+        <result property="finishCount"  column="finish_count"  />
+        <result property="avgScore"     column="avg_score"     />
+        <result property="remark"       column="remark"        />
+    </resultMap>
+
+    <sql id="selectRepairWorkerVo">
+        select worker_id, user_id, worker_no, worker_name, phone, skills, status,
+               total_count, finish_count, avg_score, remark
+        from repair_worker
+    </sql>
+
+    <select id="selectRepairWorkerList" parameterType="RepairWorker" resultMap="RepairWorkerResult">
+        <include refid="selectRepairWorkerVo"/>
+        <where>
+            <if test="workerNo != null and workerNo != ''"> and worker_no like concat('%', #{workerNo}, '%')</if>
+            <if test="workerName != null and workerName != ''"> and worker_name like concat('%', #{workerName}, '%')</if>
+            <if test="phone != null and phone != ''"> and phone like concat('%', #{phone}, '%')</if>
+            <if test="skills != null and skills != ''"> and find_in_set(#{skills}, skills)</if>
+            <if test="status != null and status != ''"> and status = #{status}</if>
+        </where>
+        order by worker_id
+    </select>
+
+    <select id="selectRepairWorkerById" parameterType="Long" resultMap="RepairWorkerResult">
+        <include refid="selectRepairWorkerVo"/>
+        where worker_id = #{workerId}
+    </select>
+
+    <select id="selectRepairWorkerByUserId" parameterType="Long" resultMap="RepairWorkerResult">
+        <include refid="selectRepairWorkerVo"/>
+        where user_id = #{userId}
+        limit 1
+    </select>
+
+    <select id="selectAvailableWorkers" resultMap="RepairWorkerResult">
+        <include refid="selectRepairWorkerVo"/>
+        where status = '0'
+        <if test="skill != null and skill != ''">
+            and find_in_set(#{skill}, skills)
+        </if>
+        order by avg_score desc, finish_count asc
+    </select>
+
+    <insert id="insertRepairWorker" parameterType="RepairWorker" useGeneratedKeys="true" keyProperty="workerId">
+        insert into repair_worker
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="userId != null">user_id,</if>
+            <if test="workerNo != null and workerNo != ''">worker_no,</if>
+            <if test="workerName != null and workerName != ''">worker_name,</if>
+            <if test="phone != null">phone,</if>
+            <if test="skills != null">skills,</if>
+            <if test="status != null and status != ''">status,</if>
+            <if test="totalCount != null">total_count,</if>
+            <if test="finishCount != null">finish_count,</if>
+            <if test="avgScore != null">avg_score,</if>
+            <if test="remark != null">remark,</if>
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="userId != null">#{userId},</if>
+            <if test="workerNo != null and workerNo != ''">#{workerNo},</if>
+            <if test="workerName != null and workerName != ''">#{workerName},</if>
+            <if test="phone != null">#{phone},</if>
+            <if test="skills != null">#{skills},</if>
+            <if test="status != null and status != ''">#{status},</if>
+            <if test="totalCount != null">#{totalCount},</if>
+            <if test="finishCount != null">#{finishCount},</if>
+            <if test="avgScore != null">#{avgScore},</if>
+            <if test="remark != null">#{remark},</if>
+        </trim>
+    </insert>
+
+    <update id="updateRepairWorker" parameterType="RepairWorker">
+        update repair_worker
+        <trim prefix="SET" suffixOverrides=",">
+            <if test="userId != null">user_id = #{userId},</if>
+            <if test="workerNo != null and workerNo != ''">worker_no = #{workerNo},</if>
+            <if test="workerName != null and workerName != ''">worker_name = #{workerName},</if>
+            <if test="phone != null">phone = #{phone},</if>
+            <if test="skills != null">skills = #{skills},</if>
+            <if test="status != null and status != ''">status = #{status},</if>
+            <if test="totalCount != null">total_count = #{totalCount},</if>
+            <if test="finishCount != null">finish_count = #{finishCount},</if>
+            <if test="avgScore != null">avg_score = #{avgScore},</if>
+            <if test="remark != null">remark = #{remark},</if>
+        </trim>
+        where worker_id = #{workerId}
+    </update>
+
+    <!-- 账号改了手机号后，同步维修工档案里的联系电话 -->
+    <update id="updatePhoneByUserId">
+        update repair_worker set phone = #{phone} where user_id = #{userId}
+    </update>
+
+    <delete id="deleteRepairWorkerByIds" parameterType="String">
+        delete from repair_worker where worker_id in
+        <foreach item="workerId" collection="array" open="(" separator="," close=")">
+            #{workerId}
+        </foreach>
+    </delete>
+
+    <!-- 依据工单与评价数据重算维修工的接单量、完成量与平均分 -->
+    <update id="refreshWorkerStat" parameterType="Long">
+        update repair_worker w
+        set w.total_count = (select count(*) from repair_order o where o.worker_id = w.user_id),
+            w.finish_count = (select count(*) from repair_order o where o.worker_id = w.user_id
+                                and o.status in ('completed','rated')),
+            w.avg_score = ifnull((select round(avg(e.score), 1) from repair_evaluation e
+                                where e.worker_id = w.user_id), 0)
+        where w.worker_id = #{workerId}
+    </update>
+
+</mapper>

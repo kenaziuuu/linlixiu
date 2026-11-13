@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+"http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.linlixiu.system.mapper.RepairMessageMapper">
+
+    <resultMap type="RepairMessage" id="RepairMessageResult">
+        <result property="messageId"     column="message_id"     />
+        <result property="receiverId"    column="receiver_id"    />
+        <result property="receiverName"  column="receiver_name"  />
+        <result property="title"         column="title"          />
+        <result property="content"       column="content"        />
+        <result property="msgType"       column="msg_type"       />
+        <result property="orderId"       column="order_id"       />
+        <result property="isRead"        column="is_read"        />
+        <result property="createTime"    column="create_time"    />
+    </resultMap>
+
+    <sql id="selectRepairMessageVo">
+        select m.message_id, m.receiver_id, u.nick_name as receiver_name, m.title, m.content,
+               m.msg_type, m.order_id, m.is_read, m.create_time
+        from repair_message m
+        left join sys_user u on u.user_id = m.receiver_id
+    </sql>
+
+    <select id="selectRepairMessageList" parameterType="RepairMessage" resultMap="RepairMessageResult">
+        <include refid="selectRepairMessageVo"/>
+        <where>
+            <if test="receiverId != null"> and m.receiver_id = #{receiverId}</if>
+            <if test="msgType != null and msgType != ''"> and m.msg_type = #{msgType}</if>
+            <if test="isRead != null"> and m.is_read = #{isRead}</if>
+            <if test="title != null and title != ''"> and m.title like concat('%', #{title}, '%')</if>
+        </where>
+        order by m.is_read asc, m.message_id desc
+    </select>
+
+    <insert id="insertRepairMessage" parameterType="RepairMessage" useGeneratedKeys="true" keyProperty="messageId">
+        insert into repair_message
+        <trim prefix="(" suffix=")" suffixOverrides=",">
+            <if test="receiverId != null">receiver_id,</if>
+            <if test="title != null and title != ''">title,</if>
+            <if test="content != null">content,</if>
+            <if test="msgType != null and msgType != ''">msg_type,</if>
+            <if test="orderId != null">order_id,</if>
+            <if test="isRead != null">is_read,</if>
+            create_time
+        </trim>
+        <trim prefix="values (" suffix=")" suffixOverrides=",">
+            <if test="receiverId != null">#{receiverId},</if>
+            <if test="title != null and title != ''">#{title},</if>
+            <if test="content != null">#{content},</if>
+            <if test="msgType != null and msgType != ''">#{msgType},</if>
+            <if test="orderId != null">#{orderId},</if>
+            <if test="isRead != null">#{isRead},</if>
+            sysdate()
+        </trim>
+    </insert>
+
+    <update id="markRead">
+        update repair_message set is_read = 1
+        where message_id = #{messageId} and receiver_id = #{receiverId}
+    </update>
+
+    <update id="markAllRead" parameterType="Long">
+        update repair_message set is_read = 1 where receiver_id = #{receiverId} and is_read = 0
+    </update>
+
+    <select id="selectUnreadCount" parameterType="Long" resultType="int">
+        select count(*) from repair_message where receiver_id = #{receiverId} and is_read = 0
+    </select>
+
+    <delete id="deleteRepairMessageByIds" parameterType="String">
+        delete from repair_message where message_id in
+        <foreach item="messageId" collection="array" open="(" separator="," close=")">
+            #{messageId}
+        </foreach>
+    </delete>
+
+</mapper>
