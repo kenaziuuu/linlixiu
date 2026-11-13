@@ -657,6 +657,7 @@ Write-Host "    dispatcher   调度员       派单、催办、统计" -Foregrou
 Write-Host "    worker01     维修工       接单、进度、完工" -ForegroundColor Gray
 Write-Host "    resident01   居民         报修、评价" -ForegroundColor Gray
 Write-Host ""
-Write-Host "  关闭服务：关掉「后端-8081」和「前端-88」两个窗口即可" -ForegroundColor Gray
+Write-Host "  关闭服务：双击项目根目录的「一键停止.bat」" -ForegroundColor Gray
+Write-Host "  它会关闭本目录的前端、后端和隐藏运行的 Redis；删除文件夹前请先停止。" -ForegroundColor Gray
 Write-Host ""
 Read-Host "  按回车键关闭本窗口（服务会继续运行）" | Out-Null

@@ -68,10 +68,12 @@ Community_repair_reporting_management_system
 │   └── src
 │       ├── api/repair    # 业务接口封装
 │       └── views/repair  # order / dispatch / task / evaluation / worker / message / stats
-├── tools                    # 一键启动相关，正常使用无需改动
+├── tools                    # 一键启动与停止相关，正常使用无需改动
 │   ├── launcher.ps1         # 环境检测、自动安装、启动编排
+│   ├── stopper.ps1          # 识别并停止当前目录的项目服务
 │   └── redis                # 内置 Redis 便携版（约 2.5MB，免安装）
 ├── 一键启动.bat             # 双击启动整个系统
+├── 一键停止.bat             # 双击停止本目录的前端、后端和内置 Redis
 └── sql
     ├── ry_20231130.sql       # 框架基础库（先执行）
     ├── quartz.sql            # Quartz 调度表（按需执行）
@@ -100,10 +102,24 @@ Community_repair_reporting_management_system
 
 **环境要求**：脚本可以自动下载安装 JDK 8、Node.js 和 Maven；**MySQL 需要本机已安装并启动**（涉及 root 密码与系统服务，脚本只做检测和提示，不会静默安装）。
 
-**关闭服务**：关掉标题为「后端-8081」和「前端-88」的两个命令行窗口即可。
+**关闭服务**：双击项目根目录的 `一键停止.bat`，具体步骤见下面的说明。
 
 > 想了解每一步在做什么、或者要自己控制启动过程，继续看下面的 5.0 起的手动步骤。
 > 手动步骤里的 Redis 路径按你本机实际安装位置填写；如果本机没装过 Redis，直接用项目内置的 `tools\redis\redis-server.exe` 即可。
+
+### 一键停止
+
+使用完系统后，或准备删除、移动下载的项目文件夹时：
+
+1. 打开**要停止的那份项目目录**，双击根目录的 `一键停止.bat`。
+2. 等待窗口提示“当前目录的前端、后端和内置 Redis 均已停止”。Redis 会先保存数据再退出。
+3. 按回车键关闭停止窗口，再删除或移动项目文件夹。
+
+一键启动拉起的内置 Redis 会隐藏在后台。关闭浏览器、启动窗口或前后端终端后，它仍可能运行并占用 `tools\redis`，因此需要执行一键停止完成清理。
+
+停止脚本按项目目录识别服务，只处理本目录的前端、后端及内置 Redis；其他目录的项目服务和系统 MySQL 服务继续运行。服务已经停止时，重复执行脚本也会正常结束。
+
+如果窗口提示停止失败或仍有进程，请根据窗口中的进程号和错误信息检查，确认服务退出并关闭相关窗口后再删除文件夹。通过 IDEA 启动的后端应在 IDEA 中点击停止；独立安装在其他位置的 Redis 应通过其终端或服务管理器关闭。
 
 ### 5.0 先看懂启动顺序
 
@@ -335,6 +351,7 @@ App running at:
 | 报修类型等中文显示成 `姘寸數缁翠慨` | 导入时没指定 utf8mb4，或 Redis 缓存了旧乱码 | 清字典缓存（见下方说明），再 `Ctrl+F5` 强制刷新 |
 | `Port 8081 was already in use` | 上次的进程没关干净 | 任务管理器结束 `java.exe`，或 `netstat -ano \| findstr :8081` 查 PID 后 `taskkill /PID xxx /F` |
 | `Port 88 was already in use` | 前端重复启动 | 关掉多余的命令行窗口 |
+| 关闭终端后仍无法删除项目文件夹 | 内置 Redis 等项目进程可能仍在后台运行 | 在待删除的项目目录双击 `一键停止.bat`，确认停止成功并关闭停止窗口后再删除 |
 | `Unable to access jarfile linlixiu-admin.jar` | 还没打包 | 先执行 `mvn clean package -DskipTests` |
 | 页面能打开但所有接口 404 / 500 | 后端没起来或端口不对 | 确认 `localhost:8081` 能访问，检查 `vue.config.js` 里代理指向 `8081` |
 | 菜单是空的，只有「系统管理」 | `repair_business.sql` 没导全 | 重导该文件 |
@@ -386,7 +403,7 @@ npm run dev
 
 然后浏览器打开 `http://localhost:88`，用 `admin` / `admin123` 登录。
 
-> 停止服务：在对应窗口按 `Ctrl + C`，或直接关闭窗口。
+> 停止手动启动的前后端：在对应窗口按 `Ctrl + C`，或在 IDEA 中点击停止。若使用项目内置 Redis，再双击根目录的 `一键停止.bat` 完成清理；外部 Redis 通过其终端或服务管理器关闭。
 
 ## 六、数据表说明
 
