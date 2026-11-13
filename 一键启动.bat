@@ -1,17 +1,27 @@
 @echo off
+setlocal
 cd /d "%~dp0"
-title 邻里修 - 一键启动
+title Linlixiu - Launcher
 
-where powershell >nul 2>nul
+where powershell.exe >nul 2>nul
 if errorlevel 1 (
     echo.
-    echo  [错误] 没有找到 PowerShell，无法自动启动
-    echo         请手动运行 tools\launcher.ps1
+    echo [ERROR] Windows PowerShell was not found.
+    echo Please run tools\launcher.ps1 with PowerShell.
     echo.
     pause
     exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\launcher.ps1"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\launcher.ps1"
+set "LAUNCH_EXIT=%ERRORLEVEL%"
 
-if errorlevel 1 pause
+if not "%LAUNCH_EXIT%"=="0" (
+    echo.
+    echo [ERROR] Launcher exited with code %LAUNCH_EXIT%.
+    echo Review the error above before closing this window.
+    echo.
+    pause
+)
+
+exit /b %LAUNCH_EXIT%

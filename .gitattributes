@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Preserve CRLF bytes in Windows batch files, including GitHub ZIP archives.
+*.bat -text
+*.cmd -text
