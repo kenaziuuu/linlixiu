@@ -118,12 +118,14 @@ export default {
   },
   methods: {
     getCode() {
-      getCodeImg().then(res => {
+      return getCodeImg().then(res => {
         this.captchaEnabled = res.captchaEnabled === undefined ? true : res.captchaEnabled;
         if (this.captchaEnabled) {
           this.codeUrl = "data:image/gif;base64," + res.img;
           this.loginForm.uuid = res.uuid;
         }
+      }).catch(() => {
+        // 请求拦截器会提示重试后的最终失败，避免初始化产生未处理的 Promise 拒绝。
       });
     },
     getCookie() {

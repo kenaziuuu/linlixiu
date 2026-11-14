@@ -10,6 +10,7 @@ import { saveAs } from 'file-saver'
 let downloadLoadingInstance;
 // 是否显示重新登录
 export let isRelogin = { show: false };
+export const LOGIN_EXPIRED_MESSAGE = '无效的会话，或者会话已过期，请重新登录。';
 
 axios.defaults.headers['Content-Type'] = 'application/json;charset=utf-8'
 // 创建axios实例
@@ -93,7 +94,7 @@ service.interceptors.response.use(res => {
         isRelogin.show = false;
       });
     }
-      return Promise.reject('无效的会话，或者会话已过期，请重新登录。')
+      return Promise.reject(LOGIN_EXPIRED_MESSAGE)
     } else if (code === 500) {
       Message({ message: msg, type: 'error' })
       return Promise.reject(new Error(msg))
@@ -117,10 +118,14 @@ service.interceptors.response.use(res => {
     } else if (message.includes("Request failed with status code")) {
       message = "系统接口" + message.substr(message.length - 3) + "异常";
     }
-    // 后端刚启动时，登录页的验证码请求容易超时；静默重试，不弹错误提示
+    // 冷启动时代理可能先返回 5xx；只重试幂等的验证码请求，最终失败仍正常提示。
     const cfg = error.config || {}
-    if (cfg.url && cfg.url.indexOf('captchaImage') !== -1 &&
-        (message === '系统接口请求超时' || message === '后端接口连接异常')) {
+    const status = error.response && error.response.status
+    const isCaptchaRequest = (cfg.method || 'get').toLowerCase() === 'get' &&
+      /\/captchaImage(?:\?|$)/.test(cfg.url || '')
+    const isTransientError = message === '系统接口请求超时' || message === '后端接口连接异常' ||
+      [500, 502, 503, 504].indexOf(status) !== -1
+    if (isCaptchaRequest && isTransientError) {
       cfg.__captchaRetry = (cfg.__captchaRetry || 0) + 1
       if (cfg.__captchaRetry <= 3) {
         return new Promise(resolve => setTimeout(resolve, 1500))

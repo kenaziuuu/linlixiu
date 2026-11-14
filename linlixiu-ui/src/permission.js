@@ -4,7 +4,7 @@ import { Message } from 'element-ui'
 import NProgress from 'nprogress'
 import 'nprogress/nprogress.css'
 import { getToken } from '@/utils/auth'
-import { isRelogin } from '@/utils/request'
+import { isRelogin, LOGIN_EXPIRED_MESSAGE } from '@/utils/request'
 
 NProgress.configure({ showSpinner: false })
 
@@ -32,7 +32,18 @@ router.beforeEach((to, from, next) => {
             next({ ...to, replace: true }) // hack方法 确保addRoutes已完成
           })
         }).catch(err => {
+            // 首次打开时残留的过期 Cookie 直接清理并回到登录页。
+            // 不调用已失效会话的退出接口，也不把正常的重新登录流程当作系统故障。
+            if (err === LOGIN_EXPIRED_MESSAGE) {
+              store.dispatch('FedLogOut').then(() => {
+                isRelogin.show = false
+                next({ path: '/login', query: { redirect: to.fullPath }, replace: true })
+                NProgress.done()
+              })
+              return
+            }
             store.dispatch('LogOut').then(() => {
+              isRelogin.show = false
               Message.error(err)
               next({ path: '/' })
             })

@@ -85,6 +85,33 @@ function Test-Http($url, $timeoutMs = 5000) {
     } catch { return $false }
 }
 
+# 验证浏览器实际使用的代理链路，并读取完整的验证码响应。
+# 只有 HTTP 200 不够：错误 JSON 或前端兜底 HTML 都不代表接口已就绪。
+function Test-ApiReady($url, $timeoutMs = 5000) {
+    $res = $null
+    $reader = $null
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($url)
+        $req.Method = "GET"
+        $req.Timeout = $timeoutMs
+        $req.ReadWriteTimeout = $timeoutMs
+        $req.Proxy = $null
+        $res = $req.GetResponse()
+        if ([int]$res.StatusCode -ne 200) { return $false }
+        $reader = New-Object System.IO.StreamReader($res.GetResponseStream())
+        $body = $reader.ReadToEnd() | ConvertFrom-Json -ErrorAction Stop
+        if ($body.code -ne 200) { return $false }
+        if ($body.captchaEnabled -is [bool] -and -not $body.captchaEnabled) { return $true }
+        return (-not [string]::IsNullOrWhiteSpace([string]$body.img) -and
+                -not [string]::IsNullOrWhiteSpace([string]$body.uuid))
+    } catch {
+        return $false
+    } finally {
+        if ($reader) { $reader.Dispose() }
+        if ($res) { $res.Close() }
+    }
+}
+
 # 带进度条下载（自动跟随 302 跳转）
 function Download-WithProgress($url, $dest) {
     try {
@@ -605,49 +632,51 @@ if (Test-Port 88) {
 }
 
 # ---------------------------------------------------------------- 等待就绪
-# 登录页一加载就会请求 /captchaImage，后端没预热完会弹「系统接口请求超时」。
-# 这里先替页面把接口探活，都就绪后再打开浏览器，就不用手动刷新了。
+# 登录页通过 /dev-api/captchaImage 访问后端；直接探测 8081 无法验证前端代理。
+# 等页面和完整代理链路均就绪后再打开浏览器，首次编译较慢时也不提前打开。
 Write-Host ""
-Step "等待服务就绪（最多 120 秒）..."
+Step "等待页面与接口就绪（首次编译最多约 180 秒）..."
 $uiReady = $false
 $apiReady = $false
-for ($i = 0; $i -lt 60; $i++) {
-    if (-not $uiReady) { $uiReady = Test-Http "http://localhost:88" }
-    # 端口先监听再发请求，避免后端没起来时每轮都白等一个 HTTP 超时
-    if (-not $apiReady -and (Test-Port 8081)) {
-        $apiReady = Test-Http "http://localhost:8081/captchaImage" 3000
+$readyClock = [System.Diagnostics.Stopwatch]::StartNew()
+$nextProgress = 10
+while ($readyClock.Elapsed.TotalSeconds -lt 180) {
+    $remainingMs = [int](180000 - $readyClock.Elapsed.TotalMilliseconds)
+    if ($remainingMs -le 0) { break }
+    $uiReady = Test-Http "http://localhost:88" ([Math]::Min(5000, $remainingMs))
+    $apiReady = $false
+    $remainingMs = [int](180000 - $readyClock.Elapsed.TotalMilliseconds)
+    if ($uiReady -and $remainingMs -gt 0) {
+        $apiReady = Test-ApiReady "http://localhost:88/dev-api/captchaImage" ([Math]::Min(5000, $remainingMs))
     }
     if ($uiReady -and $apiReady) { break }
-    Start-Sleep -Seconds 2
-    if ($i % 5 -eq 4) {
+    if ($readyClock.Elapsed.TotalSeconds -ge $nextProgress) {
         $s1 = if ($uiReady) { "前端 OK" } else { "前端编译中" }
-        $s2 = if ($apiReady) { "后端 OK" } else { "后端启动中" }
-        Write-Host "      ... 已等待 $(($i + 1) * 2) 秒（$s1 / $s2）" -ForegroundColor DarkGray
+        $s2 = if ($apiReady) { "接口 OK" } else { "接口预热中" }
+        Write-Host "      ... 已等待 $([int]$readyClock.Elapsed.TotalSeconds) 秒（$s1 / $s2）" -ForegroundColor DarkGray
+        $nextProgress = $readyClock.Elapsed.TotalSeconds + 10
     }
+    Start-Sleep -Milliseconds 500
 }
-# 兜底：页面没返回 200，但 88 端口确实在监听，也认为前端已起来
-if (-not $uiReady -and (Test-Port 88)) {
-    $uiReady = $true
-    Warn "页面响应较慢，但 88 端口已就绪"
-}
+$readyClock.Stop()
 $ready = $uiReady -and $apiReady
 
 Write-Host ""
 Line
 if ($ready) {
     Ok "启动成功！"
+    try {
+        Start-Process "http://localhost:88"
+        Ok "已在默认浏览器中打开 http://localhost:88"
+    } catch {
+        Warn "没能自动打开浏览器，请手动访问 http://localhost:88"
+    }
 } elseif ($uiReady) {
-    Warn "前端已就绪，但后端接口暂时没有响应"
-    Hint "请查看「后端-8081」窗口的日志，等它打印启动完成后刷新页面即可。"
+    Warn "页面已就绪，但代理接口尚未通过检查，暂不自动打开浏览器"
+    Hint "请查看「后端-8081」和「前端-88」窗口，确认无报错后访问 http://localhost:88。"
 } else {
-    Warn "服务还没有就绪，可能仍在编译"
+    Warn "服务还没有就绪，可能仍在编译，暂不自动打开浏览器"
     Hint "请查看「前端-88」和「后端-8081」两个窗口的日志。"
-}
-try {
-    Start-Process "http://localhost:88"
-    Ok "已在默认浏览器中打开 http://localhost:88"
-} catch {
-    Warn "没能自动打开浏览器，请手动访问 http://localhost:88"
 }
 Line
 Write-Host ""
