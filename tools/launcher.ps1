@@ -34,10 +34,16 @@ if (Test-Path "D:\") {
 }
 if (-not $runtimeDir) { $runtimeDir = Join-Path $root "tools\runtime" }
 
-# 下载地址：Node 走国内镜像，JDK 走 Adoptium 官方 API，Maven 走官方中央仓库
-$JDK_URL   = "https://api.adoptium.net/v3/binary/latest/8/ga/windows/x64/jdk/hotspot/normal/eclipse"
+# JDK 从国内镜像目录选择最新的 Temurin 8 Windows x64 JDK ZIP，避免跳转 GitHub。
+$JDK_MIRRORS = @(
+    @{ Name = "清华大学镜像"; Index = "https://mirrors.tuna.tsinghua.edu.cn/Adoptium/8/jdk/x64/windows/" },
+    @{ Name = "南京大学镜像"; Index = "https://mirrors.nju.edu.cn/adoptium/8/jdk/x64/windows/" }
+)
 $NODE_URL  = "https://registry.npmmirror.com/-/binary/node/v20.18.0/node-v20.18.0-win-x64.zip"
-$MVEN_URL  = "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip"
+$MAVEN_URLS = @(
+    "https://maven.aliyun.com/repository/public/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip",
+    "https://repo.huaweicloud.com/repository/maven/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip"
+)
 
 # ---------------------------------------------------------------- 输出样式
 function Line { Write-Host "  ------------------------------------------------------" -ForegroundColor DarkGray }
@@ -112,46 +118,109 @@ function Test-ApiReady($url, $timeoutMs = 5000) {
     }
 }
 
-# 带进度条下载（自动跟随 302 跳转）
-function Download-WithProgress($url, $dest) {
+# 验证 ZIP 中央目录和安装包内容，拒绝错误网页、空文件、截断包和错误的软件包。
+function Test-ZipPackage($path, [long]$minBytes = 1024, [string[]]$requiredEntries = @()) {
+    $archive = $null
+    try {
+        if (-not (Test-Path -LiteralPath $path) -or (Get-Item -LiteralPath $path).Length -lt $minBytes) { return $false }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($path)
+        if ($archive.Entries.Count -eq 0) { return $false }
+        foreach ($entry in $requiredEntries) {
+            $suffix = $entry.Replace('\', '/')
+            $found = $false
+            foreach ($item in $archive.Entries) {
+                if ($item.FullName.Equals($suffix, [StringComparison]::OrdinalIgnoreCase) -or
+                    $item.FullName.EndsWith('/' + $suffix, [StringComparison]::OrdinalIgnoreCase)) {
+                    $found = $true
+                    break
+                }
+            }
+            if (-not $found) { return $false }
+        }
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($archive) { $archive.Dispose() }
+    }
+}
+
+# 先下载到临时文件，校验通过后才替换正式 ZIP（自动跟随 302 跳转）。
+function Download-WithProgress($url, $dest, [long]$minBytes = 1024, [string[]]$requiredEntries = @()) {
+    $res = $null
+    $inputStream = $null
+    $outputStream = $null
+    $partial = $dest + ".part"
+    $completed = $false
     try {
         $req = [System.Net.HttpWebRequest]::Create($url)
         $req.Timeout = 60000
-        $req.UserAgent = "Mozilla/5.0"
+        $req.ReadWriteTimeout = 60000
+        $req.UserAgent = "curl/8.0 (LinlixiuLauncher)"
+        $req.CookieContainer = New-Object System.Net.CookieContainer
+        $req.MaximumAutomaticRedirections = 10
         $res = $req.GetResponse()
         $total = $res.ContentLength
-        $in = $res.GetResponseStream()
-        $out = [System.IO.File]::Create($dest)
+        if ($total -ge 0 -and $total -lt $minBytes) {
+            throw "响应文件仅 $total 字节，未达到安装包大小要求，可能是下载错误页面。"
+        }
+        $inputStream = $res.GetResponseStream()
+        $outputStream = [System.IO.File]::Create($partial)
         $buf = New-Object byte[] 131072
-        $read = 0
+        [long]$read = 0
         $lastPct = -1
-        while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
-            $out.Write($buf, 0, $n)
+        while (($n = $inputStream.Read($buf, 0, $buf.Length)) -gt 0) {
+            $outputStream.Write($buf, 0, $n)
             $read += $n
             if ($total -gt 0) {
-                $pct = [int]($read * 100 / $total)
+                $pct = [Math]::Min(99, [int]($read * 100 / $total))
                 if ($pct -ne $lastPct -and ($pct % 5 -eq 0)) {
-                    Write-Host ("`r      已下载 {0}%  ({1} MB / {2} MB)      " -f $pct, [int]($read/1MB), [int]($total/1MB)) -NoNewline -ForegroundColor DarkGray
+                    Write-Host ("`r      已下载 {0}%  ({1:N1} MB / {2:N1} MB)      " -f $pct, ($read/1MB), ($total/1MB)) -NoNewline -ForegroundColor DarkGray
                     $lastPct = $pct
                 }
             }
         }
-        $out.Close(); $in.Close(); $res.Close()
+        $outputStream.Dispose()
+        $outputStream = $null
+        if ($total -ge 0 -and $read -ne $total) { throw "下载不完整：收到 $read 字节，预期 $total 字节。" }
+        if (-not (Test-ZipPackage $partial $minBytes $requiredEntries)) {
+            throw "安装包校验失败：文件过小、ZIP 损坏或缺少预期程序，已拒绝使用。"
+        }
+        Move-Item -LiteralPath $partial -Destination $dest -Force -ErrorAction Stop
+        $completed = $true
         Write-Host ""
-        return (Test-Path $dest)
+        Ok ("下载完成，安装包校验通过（{0:N1} MB）" -f ($read/1MB))
+        return $true
     } catch {
         Write-Host ""
         Err "下载失败：$($_.Exception.Message)"
         return $false
+    } finally {
+        if ($outputStream) { $outputStream.Dispose() }
+        if ($inputStream) { $inputStream.Dispose() }
+        if ($res) { $res.Close() }
+        if (-not $completed -and (Test-Path -LiteralPath $partial)) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
 # 解压 zip 并返回包含指定文件的目录
 function Expand-AndFind($zip, $target, $probeFile) {
-    if (Test-Path $target) { Remove-Item $target -Recurse -Force -ErrorAction SilentlyContinue }
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
+    if (-not (Test-ZipPackage $zip 1 @($probeFile))) {
+        Err "安装包无效或缺少 $probeFile，已停止解压。"
+        return $null
+    }
     try {
-        Expand-Archive -Path $zip -DestinationPath $target -Force -ErrorAction Stop
+        $runtimePath = [System.IO.Path]::GetFullPath($runtimeDir).TrimEnd('\') + '\'
+        $targetPath = [System.IO.Path]::GetFullPath($target)
+        if (-not $targetPath.StartsWith($runtimePath, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "安装目录必须位于 $runtimePath 内。"
+        }
+        if (Test-Path -LiteralPath $targetPath) { Remove-Item -LiteralPath $targetPath -Recurse -Force -ErrorAction Stop }
+        New-Item -ItemType Directory -Force -Path $targetPath | Out-Null
+        Expand-Archive -LiteralPath $zip -DestinationPath $targetPath -Force -ErrorAction Stop
     } catch {
         Err "解压失败：$($_.Exception.Message)"
         return $null
@@ -206,19 +275,58 @@ function Find-Java8 {
     return $null
 }
 
+# 每次从镜像目录解析最新的 8u 更新包，避免固定旧版本地址被镜像清理后失效。
+function Get-Java8Download($indexUrl) {
+    $res = $null
+    $reader = $null
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($indexUrl)
+        $req.Timeout = 20000
+        $req.ReadWriteTimeout = 20000
+        $req.UserAgent = "curl/8.0 (LinlixiuLauncher)"
+        $req.CookieContainer = New-Object System.Net.CookieContainer
+        $req.MaximumAutomaticRedirections = 10
+        $res = $req.GetResponse()
+        $reader = New-Object System.IO.StreamReader($res.GetResponseStream())
+        $html = $reader.ReadToEnd()
+        $files = [regex]::Matches($html, 'OpenJDK8U-jdk_x64_windows_hotspot_8u(?<update>\d+)b(?<build>\d+)\.zip(?=["''<\s])')
+        $latest = $files | Sort-Object @{ Expression = { [int]$_.Groups['update'].Value }; Descending = $true },
+            @{ Expression = { [int]$_.Groups['build'].Value }; Descending = $true } | Select-Object -First 1
+        if (-not $latest) { throw "镜像目录未找到 Windows x64 JDK 8 的 ZIP 包。" }
+        return $indexUrl.TrimEnd('/') + '/' + $latest.Value
+    } catch {
+        throw
+    } finally {
+        if ($reader) { $reader.Dispose() }
+        if ($res) { $res.Close() }
+    }
+}
+
 function Install-Java8 {
-    Step "开始下载 JDK 8（Temurin 8，约 100 MB）..."
-    Hint "来源：Adoptium 官方，国内网络可能需要几分钟"
+    Step "开始下载 JDK 8（Temurin 8，约 100 MB，国内镜像）..."
+    Hint "来源：清华大学镜像；失败时自动切换南京大学镜像"
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     $zip = Join-Path $tmpDir "jdk8.zip"
-    if (-not (Download-WithProgress $JDK_URL $zip)) { return $null }
-    Step "正在解压到 $runtimeDir\jdk8 ..."
-    $jdkHome = Expand-AndFind $zip (Join-Path $runtimeDir "jdk8") "bin\java.exe"
-    if (-not $jdkHome) { Err "解压后没找到 bin\java.exe"; return $null }
-    $exe = Join-Path $jdkHome "bin\java.exe"
-    if (-not (Test-Java8 $exe)) { Err "下载到的不是 JDK 8"; return $null }
-    Remove-Item $zip -Force -ErrorAction SilentlyContinue
-    return $exe
+    foreach ($mirror in $JDK_MIRRORS) {
+        Step "正在使用 $($mirror.Name) ..."
+        try { $url = Get-Java8Download $mirror.Index } catch {
+            Warn "镜像目录读取失败：$($_.Exception.Message)，尝试备用源。"
+            continue
+        }
+        if (-not (Download-WithProgress $url $zip (50MB) @('bin/java.exe', 'bin/javac.exe'))) {
+            Warn "本镜像下载未通过，尝试备用源。"
+            continue
+        }
+        Step "正在解压到 $runtimeDir\jdk8 ..."
+        $jdkHome = Expand-AndFind $zip (Join-Path $runtimeDir "jdk8") "bin\java.exe"
+        if (-not $jdkHome) { Err "解压后没找到 bin\java.exe"; return $null }
+        $exe = Join-Path $jdkHome "bin\java.exe"
+        if (-not (Test-Java8 $exe)) { Err "下载到的不是 JDK 8"; return $null }
+        Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+        return $exe
+    }
+    Err "国内镜像均未能完成 JDK 8 安装，请检查网络或手动安装 JDK 8。"
+    return $null
 }
 
 # ---------------------------------------------------------------- MySQL
@@ -286,7 +394,7 @@ function Install-Node {
     Step "开始下载 Node.js 20（约 30 MB，国内镜像）..."
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     $zip = Join-Path $tmpDir "node.zip"
-    if (-not (Download-WithProgress $NODE_URL $zip)) { return $null }
+    if (-not (Download-WithProgress $NODE_URL $zip (10MB) @('node.exe'))) { return $null }
     Step "正在解压到 $runtimeDir\node ..."
     $nodeHome = Expand-AndFind $zip (Join-Path $runtimeDir "node") "node.exe"
     if (-not $nodeHome) { Err "解压后没找到 node.exe"; return $null }
@@ -380,7 +488,12 @@ function Install-Maven {
     Step "开始下载 Maven 3.9.9（约 9 MB）..."
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
     $zip = Join-Path $tmpDir "maven.zip"
-    if (-not (Download-WithProgress $MVEN_URL $zip)) { return $null }
+    $downloaded = $false
+    foreach ($url in $MAVEN_URLS) {
+        if (Download-WithProgress $url $zip (3MB) @('bin/mvn.cmd')) { $downloaded = $true; break }
+        Warn "本镜像下载未通过，尝试 Maven 备用源。"
+    }
+    if (-not $downloaded) { return $null }
     Step "正在解压到 $runtimeDir\maven ..."
     $mavenHome = Expand-AndFind $zip (Join-Path $runtimeDir "maven") "bin\mvn.cmd"
     if (-not $mavenHome) { Err "解压后没找到 bin\mvn.cmd"; return $null }
